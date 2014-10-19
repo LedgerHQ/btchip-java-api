@@ -42,6 +42,7 @@
                                 <sources>
                                     <source>src</source>
                                     <source>src-libusb</source>
+                                    <source>src-smartcardio</source>
                             </sources>
                             </configuration>
                         </execution>
