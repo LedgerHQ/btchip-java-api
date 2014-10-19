@@ -17,8 +17,9 @@
 ********************************************************************************
 */
 
-package com.btchip.comm.winusb;
+package com.btchip.comm.hid;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.IntBuffer;
 import java.util.Vector;
@@ -35,10 +36,11 @@ import org.usb4java.LibUsb;
 
 import com.btchip.BTChipException;
 import com.btchip.comm.BTChipTransport;
+import com.btchip.comm.LedgerHelper;
 import com.btchip.comm.usb.DesktopUsbUtils;
 import com.btchip.utils.Dump;
 
-public class BTChipTransportWinUSB implements BTChipTransport {
+public class BTChipTransportHID implements BTChipTransport {
 
 	private DeviceHandle handle;
 	private int timeout;
@@ -47,52 +49,100 @@ public class BTChipTransportWinUSB implements BTChipTransport {
 	private boolean debug;
 	private byte outEndpoint;
 	private byte inEndpoint;
+	private boolean ledger;
 	
-	private static Logger log = LoggerFactory.getLogger(BTChipTransportWinUSB.class);
+	private static Logger log = LoggerFactory.getLogger(BTChipTransportHID.class);
 	
-	BTChipTransportWinUSB(DeviceHandle handle, int timeout, byte inEndpoint, byte outEndpoint) {
+	BTChipTransportHID(DeviceHandle handle, int timeout, byte inEndpoint, byte outEndpoint) {
 		this.handle = handle;
 		this.timeout = timeout;
 		this.inEndpoint = inEndpoint;
 		this.outEndpoint = outEndpoint;
-		responseBuffer = ByteBuffer.allocateDirect(260);
+		ledger = (inEndpoint & 0x7f) != (outEndpoint & 0x7f); 
+		responseBuffer = ByteBuffer.allocateDirect(HID_BUFFER_SIZE);
 		sizeBuffer = IntBuffer.allocate(1);
 	}
 
 	@Override
 	public byte[] exchange(byte[] command) throws BTChipException {
-		byte[] response;
+		ByteArrayOutputStream response = new ByteArrayOutputStream();
+		byte[] responseData = null;
+		int offset = 0;
+		int responseSize;
+		int result;
 		if (debug) {
 			log.debug("=> {}", Dump.dump(command));
 		}
-		ByteBuffer commandBuffer = ByteBuffer.allocateDirect(command.length);
-		sizeBuffer.clear();
-		commandBuffer.put(command);
-		int result = LibUsb.bulkTransfer(handle, outEndpoint, commandBuffer, sizeBuffer, timeout);
-		if (result != LibUsb.SUCCESS) {
-			throw new BTChipException("Write failed");
+		if (ledger) {
+			command = LedgerHelper.wrapCommandAPDU(LEDGER_DEFAULT_CHANNEL, command, HID_BUFFER_SIZE);
 		}
-		responseBuffer.clear();
-		sizeBuffer.clear();
-		result = LibUsb.bulkTransfer(handle, inEndpoint, responseBuffer, sizeBuffer, timeout);
-		if (result != LibUsb.SUCCESS) {
-			throw new BTChipException("Read failed");
+		ByteBuffer commandBuffer = ByteBuffer.allocateDirect(HID_BUFFER_SIZE);
+		byte[] chunk = new byte[HID_BUFFER_SIZE];
+		while(offset != command.length) {
+			int blockSize = (command.length - offset > HID_BUFFER_SIZE ? HID_BUFFER_SIZE : command.length - offset);
+			System.arraycopy(command, offset, chunk, 0, blockSize);
+			sizeBuffer.clear();
+			commandBuffer.put(chunk);
+			result = LibUsb.interruptTransfer(handle, outEndpoint, commandBuffer, sizeBuffer, timeout);
+			if (result != LibUsb.SUCCESS) {
+				throw new BTChipException("Write failed");
+			}
+			offset += blockSize;
+			commandBuffer.clear();
+			sizeBuffer.clear();
 		}
-		int sw1 = (int)(responseBuffer.get() & 0xff);
-		int sw2 = (int)(responseBuffer.get() & 0xff);
-		if (sw1 != SW1_DATA_AVAILABLE) {
-			response = new byte[2];
-			response[0] = (byte)sw1;
-			response[1] = (byte)sw2;						
+		if (!ledger) {
+			responseBuffer.clear();
+			result = LibUsb.interruptTransfer(handle, inEndpoint, responseBuffer, sizeBuffer, timeout);
+			if (result != LibUsb.SUCCESS) {
+				throw new BTChipException("Read failed");
+			}
+			int sw1 = (int)(responseBuffer.get() & 0xff);
+			int sw2 = (int)(responseBuffer.get() & 0xff);
+			if (sw1 != SW1_DATA_AVAILABLE) {
+				response.write(sw1);
+				response.write(sw2);
+			}
+			else {
+				responseSize = sw2 + 2;
+				offset = 0;
+				int blockSize = (responseSize > HID_BUFFER_SIZE - 2 ? HID_BUFFER_SIZE - 2 : responseSize);
+				responseBuffer.get(chunk, 0, blockSize);
+				response.write(chunk, 0, blockSize);
+				offset += blockSize;
+				responseBuffer.clear();
+				sizeBuffer.clear();
+				while (offset != responseSize) {
+					result = LibUsb.interruptTransfer(handle, inEndpoint, responseBuffer, sizeBuffer, timeout);
+					if (result != LibUsb.SUCCESS) {
+						throw new BTChipException("Read failed");
+					}
+					blockSize = (responseSize - offset > HID_BUFFER_SIZE ? HID_BUFFER_SIZE : responseSize - offset);
+					responseBuffer.get(chunk, 0, blockSize);
+					response.write(chunk, 0, blockSize);
+					offset += blockSize;				
+				}
+				responseBuffer.clear();
+				sizeBuffer.clear();
+			}
+			responseData = response.toByteArray();
 		}
-		else {
-			response = new byte[sw2 + 2];
-			responseBuffer.get(response);
-		}
+		else {			
+			while ((responseData = LedgerHelper.unwrapResponseAPDU(LEDGER_DEFAULT_CHANNEL, response.toByteArray(), HID_BUFFER_SIZE)) == null) {
+				responseBuffer.clear();
+				sizeBuffer.clear();
+				result = LibUsb.interruptTransfer(handle, inEndpoint, responseBuffer, sizeBuffer, timeout);
+				if (result != LibUsb.SUCCESS) {
+					throw new BTChipException("Read failed");
+				}
+				responseBuffer.get(chunk, 0, HID_BUFFER_SIZE);
+				response.write(chunk, 0, HID_BUFFER_SIZE);				
+			}						
+		}		
 		if (debug) {
-			log.debug("<= {}", Dump.dump(response));
+			log.debug("<= {}", Dump.dump(responseData));
 		}
-		return response;		
+		return responseData;		
 	}
 	
 	@Override
@@ -103,7 +153,8 @@ public class BTChipTransportWinUSB implements BTChipTransport {
 	@Override
 	public void close() throws BTChipException {
 		LibUsb.releaseInterface(handle, 0);
-		LibUsb.close(handle);
+		LibUsb.attachKernelDriver(handle, 0);		
+		LibUsb.close(handle);		
 	}
 	
 	public static String[] listDevices() throws BTChipException {
@@ -115,7 +166,7 @@ public class BTChipTransportWinUSB implements BTChipTransport {
 		return result.toArray(new String[0]);
 	}
 	
-	public static BTChipTransportWinUSB openDevice(String deviceName) throws BTChipException {
+	public static BTChipTransportHID openDevice(String deviceName) throws BTChipException {
 		byte inEndpoint = (byte)0xff;
 		byte outEndpoint = (byte)0xff;
 		Device devices[] = DesktopUsbUtils.enumDevices(VID, PID);
@@ -153,21 +204,23 @@ public class BTChipTransportWinUSB implements BTChipTransport {
 		if (outEndpoint == (byte)0xff) {
 			throw new BTChipException("Couldn't find OUT endpoint");
 		}
+		
 		DeviceHandle handle = new DeviceHandle();
 		result = LibUsb.open(targetDevice, handle);
 		if (result != LibUsb.SUCCESS) {
 			throw new BTChipException("Failed to open device");
 		}
-		LibUsb.claimInterface(handle, 0);
-		return new BTChipTransportWinUSB(handle, TIMEOUT, inEndpoint, outEndpoint);
+		LibUsb.detachKernelDriver(handle, 0);
+		LibUsb.claimInterface(handle, 0);					
+		return new BTChipTransportHID(handle, TIMEOUT, inEndpoint, outEndpoint);
 	}
 	
-	public static BTChipTransportWinUSB openDevice() throws BTChipException {
+	public static BTChipTransportHID openDevice() throws BTChipException {
 		return openDevice(null);
 	}
 	
 	public static void main(String args[]) throws Exception {
-		BTChipTransportWinUSB device = openDevice();
+		BTChipTransportHID device = openDevice();
 		device.setDebug(true);
 		byte[] result = device.exchange(Dump.hexToBin("e0c4000000"));
 		System.out.println(Dump.dump(result));
@@ -175,7 +228,9 @@ public class BTChipTransportWinUSB implements BTChipTransport {
 	}
 	
 	private static final int VID = 0x2581;
-	private static final int PID = 0x1b7c;
+	private static final int PID = 0x2b7c;
+	private static final int HID_BUFFER_SIZE = 64;
 	private static final int SW1_DATA_AVAILABLE = 0x61;
+	private static final int LEDGER_DEFAULT_CHANNEL = 1;
 	private static final int TIMEOUT = 20000;
 }
