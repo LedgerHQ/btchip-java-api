@@ -359,7 +359,10 @@ public class BTChipDongle implements BTChipConstants {
 			byte[] script = (currentIndex == inputIndex ? redeemScript : new byte[0]);
 			data = new ByteArrayOutputStream();
 			data.write(input.isTrusted() ? (byte)0x01 : (byte)0x00);
-			data.write(input.getValue().length);
+			if (input.isTrusted()) {
+				// untrusted inputs have constant length
+				data.write(input.getValue().length);
+			}
 			BufferUtils.writeBuffer(data, input.getValue());
 			VarintUtils.write(data, script.length);
 			exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_INPUT_START, (byte)0x80, (byte)0x00, data.toByteArray(), OK);
