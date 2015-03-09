@@ -53,12 +53,16 @@ public class BTChipTransportHID implements BTChipTransport {
 	
 	private static Logger log = LoggerFactory.getLogger(BTChipTransportHID.class);
 	
-	BTChipTransportHID(DeviceHandle handle, int timeout, byte inEndpoint, byte outEndpoint) {
+	BTChipTransportHID(DeviceHandle handle, int timeout, byte inEndpoint, byte outEndpoint, boolean ledger) {
 		this.handle = handle;
 		this.timeout = timeout;
 		this.inEndpoint = inEndpoint;
 		this.outEndpoint = outEndpoint;
-		ledger = (inEndpoint & 0x7f) != (outEndpoint & 0x7f); 
+		this.ledger = ledger;
+		 // Compatibility with old prototypes, to be removed		
+		if (!this.ledger) {
+			this.ledger = (inEndpoint & 0x7f) != (outEndpoint & 0x7f); 
+		}
 		responseBuffer = ByteBuffer.allocateDirect(HID_BUFFER_SIZE);
 		sizeBuffer = IntBuffer.allocate(1);
 	}
@@ -165,17 +169,35 @@ public class BTChipTransportHID implements BTChipTransport {
 		}
 		return result.toArray(new String[0]);
 	}
+
+	public static Device matchDevice(String deviceName, int vid, int pid) throws BTChipException {
+		Device devices[] = DesktopUsbUtils.enumDevices(vid, pid);
+		Device targetDevice = null;
+                for (Device device : devices) {
+                        if ((deviceName == null) || (deviceName.length() == 0) || (DesktopUsbUtils.getDeviceId(device).equals(deviceName))) {
+                                targetDevice = device;
+                                break;
+                        }
+                }
+		return targetDevice;
+	}
 	
 	public static BTChipTransportHID openDevice(String deviceName) throws BTChipException {
 		byte inEndpoint = (byte)0xff;
 		byte outEndpoint = (byte)0xff;
-		Device devices[] = DesktopUsbUtils.enumDevices(VID, PID);
-		Device targetDevice = null;
-		for (Device device : devices) {
-			if ((deviceName == null) || (deviceName.length() == 0) || (DesktopUsbUtils.getDeviceId(device).equals(deviceName))) {
-				targetDevice = device;
-				break;
-			}					
+		boolean ledger = false;
+		Device targetDevice = matchDevice(deviceName, VID, PID);
+		if (targetDevice == null) {
+			targetDevice = matchDevice(deviceName, VID, PID_LEDGER);
+			if (targetDevice != null) {
+				ledger = true;
+			}
+			else {
+				targetDevice = matchDevice(deviceName, VID, PID_LEDGER_PROTON);
+				if (targetDevice != null) {
+					ledger = true;
+				}
+			}
 		}
 		if (targetDevice == null) {
 			throw new BTChipException("Device not found");
@@ -212,7 +234,7 @@ public class BTChipTransportHID implements BTChipTransport {
 		}
 		LibUsb.detachKernelDriver(handle, 0);
 		LibUsb.claimInterface(handle, 0);					
-		return new BTChipTransportHID(handle, TIMEOUT, inEndpoint, outEndpoint);
+		return new BTChipTransportHID(handle, TIMEOUT, inEndpoint, outEndpoint, ledger);
 	}
 	
 	public static BTChipTransportHID openDevice() throws BTChipException {
@@ -229,6 +251,8 @@ public class BTChipTransportHID implements BTChipTransport {
 	
 	private static final int VID = 0x2581;
 	private static final int PID = 0x2b7c;
+	private static final int PID_LEDGER = 0x3b7c;
+	private static final int PID_LEDGER_PROTON = 0x4b7c;
 	private static final int HID_BUFFER_SIZE = 64;
 	private static final int SW1_DATA_AVAILABLE = 0x61;
 	private static final int LEDGER_DEFAULT_CHANNEL = 1;
