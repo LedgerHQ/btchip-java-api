@@ -63,8 +63,27 @@ public class BTChipDongle implements BTChipConstants {
 			return value;
 		}
 	};
-	
-	class BTChipPublicKey {
+
+	public enum UserConfirmation {
+		NONE(0x00),
+		KEYBOARD(0x01),
+		KEYCARD_DEPRECATED(0x02),
+		KEYCARD_SCREEN(0x03),
+		KEYCARD(0x04),
+		KEYCARD_NFC(0x05);
+		
+		private int value;
+		
+		UserConfirmation(int value) {
+			this.value = value;
+		}
+		
+		public int getValue() {
+			return value;
+		}
+	}
+
+	public class BTChipPublicKey {
 		private byte[] publicKey;
 		private String address;
 		private byte[] chainCode;
@@ -85,6 +104,7 @@ public class BTChipDongle implements BTChipConstants {
 			return chainCode;
 		}
 		
+		@Override
 		public String toString() {
 			StringBuffer buffer = new StringBuffer();
 			buffer.append("Address ");
@@ -97,7 +117,7 @@ public class BTChipDongle implements BTChipConstants {
 		}
 	}
 	
-	class BTChipSignature {
+	public class BTChipSignature {
 		private byte[] signature;
 		private int yParity;
 		
@@ -113,6 +133,7 @@ public class BTChipDongle implements BTChipConstants {
 			return yParity;
 		}
 		
+		@Override
 		public String toString() {
 			StringBuffer buffer = new StringBuffer();
 			buffer.append("Signature ");
@@ -123,7 +144,7 @@ public class BTChipDongle implements BTChipConstants {
 		}
 	}
 	
-	class BTChipFirmware {
+	public class BTChipFirmware {
 		private int major;
 		private int minor;
 		private int patch;
@@ -149,6 +170,7 @@ public class BTChipDongle implements BTChipConstants {
 			return compressedKeys;
 		}
 		
+		@Override
 		public String toString() {
 			StringBuffer buffer = new StringBuffer();
 			buffer.append(major).append('.').append(minor).append('.').append(patch);
@@ -174,6 +196,7 @@ public class BTChipDongle implements BTChipConstants {
 			return trusted;
 		}
 		
+		@Override
 		public String toString() {
 			StringBuffer buffer = new StringBuffer();
 			buffer.append("Value ").append(Dump.dump(value));
@@ -184,32 +207,82 @@ public class BTChipDongle implements BTChipConstants {
 
 	public class BTChipOutput {
 		private byte[] value;
-		private boolean confirmationNeeded;
+		private UserConfirmation userConfirmation;
 		
-		public BTChipOutput(byte[] value, boolean confirmationNeeded) {
+		public BTChipOutput(byte[] value, UserConfirmation userConfirmation) {
 			this.value = value;
-			this.confirmationNeeded = confirmationNeeded;
+			this.userConfirmation = userConfirmation;
 		}
 		
 		public byte[] getValue() {
 			return value;
 		}
 		public boolean isConfirmationNeeded() {
-			return confirmationNeeded;
+			return (!userConfirmation.equals(UserConfirmation.NONE));
+		}
+		public UserConfirmation getUserConfirmation() {
+			return userConfirmation;
 		}
 		
+		@Override
 		public String toString() {
 			StringBuffer buffer = new StringBuffer();
 			buffer.append("Value ").append(Dump.dump(value));
-			buffer.append(" confirmation needed ").append(confirmationNeeded);
+			buffer.append(" confirmation type ").append(userConfirmation.toString());
 			return buffer.toString();
 		}
-	}	
+	}
+	
+	public class BTChipOutputKeycard extends BTChipOutput {
+		private byte[] keycardIndexes;
+				
+		public BTChipOutputKeycard(byte[] value, UserConfirmation userConfirmation, byte[] keycardIndexes) {
+			super(value, userConfirmation);
+			this.keycardIndexes = keycardIndexes;
+		}
+		
+		public byte[] getKeycardIndexes() {
+			return keycardIndexes;
+		}
+		
+		@Override
+		public String toString() {
+			StringBuffer buffer = new StringBuffer();
+			buffer.append(super.toString());
+			buffer.append(" address indexes ");
+			for (int i=0; i<keycardIndexes.length; i++) {
+				buffer.append(i).append(" ");
+			}
+			return buffer.toString();
+		}				
+	}
+
+	public class BTChipOutputKeycardScreen extends BTChipOutputKeycard {
+		private byte[] screenInfo;
+				
+		public BTChipOutputKeycardScreen(byte[] value, UserConfirmation userConfirmation, byte[] keycardIndexes, byte[] screenInfo) {
+			super(value, userConfirmation, keycardIndexes);
+			this.screenInfo = screenInfo;
+		}
+		
+		public byte[] getScreenInfo() {
+			return screenInfo;
+		}
+		
+		@Override
+		public String toString() {
+			StringBuffer buffer = new StringBuffer();
+			buffer.append(super.toString());
+			buffer.append(" screen data ").append(Dump.dump(screenInfo));
+			return buffer.toString();
+		}				
+	}
 	
 	private BTChipTransport transport;
 	private int lastSW;
 	
 	private static final int OK[] = { SW_OK };
+	private static final int OK_OR_NOT_SUPPORTED[] = { SW_OK, SW_INS_NOT_SUPPORTED };
 	private static final byte DUMMY[] = { 0 };
 	
 	public BTChipDongle(BTChipTransport transport) {
@@ -279,6 +352,29 @@ public class BTChipDongle implements BTChipConstants {
 		}
 		return result;
 	}
+
+    private byte[] exchangeApduSplit2(byte cla, byte ins, byte p1, byte p2, byte[] data, byte[] data2, int acceptedSW[]) throws BTChipException {
+		int offset = 0;
+		byte[] result = null;
+		int maxBlockSize = 255 - data2.length;
+		while (offset < data.length) {
+			int blockLength = ((data.length - offset) > maxBlockSize ? maxBlockSize : data.length - offset);
+			boolean lastBlock = ((offset + blockLength) == data.length);
+			byte[] apdu = new byte[blockLength + 5 + (lastBlock ? data2.length : 0)];
+			apdu[0] = cla;
+			apdu[1] = ins;
+			apdu[2] = p1;
+			apdu[3] = p2;
+			apdu[4] = (byte)(blockLength + (lastBlock ? data2.length : 0));
+			System.arraycopy(data, offset, apdu, 5, blockLength);
+			if (lastBlock) {
+				System.arraycopy(data2, 0, apdu, 5 + blockLength, data2.length);
+			}
+			result = exchangeCheck(apdu, acceptedSW);
+			offset += blockLength;
+		}
+		return result;
+	}
 	
 	public void verifyPin(byte[] pin) throws BTChipException {
 		exchangeApdu(BTCHIP_CLA, BTCHIP_INS_VERIFY_PIN, (byte)0x00, (byte)0x00, pin, OK);
@@ -325,8 +421,7 @@ public class BTChipDongle implements BTChipConstants {
 			exchangeApdu(BTCHIP_CLA, BTCHIP_INS_GET_TRUSTED_INPUT, (byte)0x80, (byte)0x00, data.toByteArray(), OK);
 			data = new ByteArrayOutputStream();
 			BufferUtils.writeBuffer(data, input.getScript());
-			BufferUtils.writeBuffer(data, input.getSequence());
-			exchangeApduSplit(BTCHIP_CLA, BTCHIP_INS_GET_TRUSTED_INPUT, (byte)0x80, (byte)0x00, data.toByteArray(), OK);			
+			exchangeApduSplit2(BTCHIP_CLA, BTCHIP_INS_GET_TRUSTED_INPUT, (byte)0x80, (byte)0x00, data.toByteArray(), input.getSequence(), OK);			
 		}
 		// Number of outputs
 		data = new ByteArrayOutputStream();
@@ -346,8 +441,12 @@ public class BTChipDongle implements BTChipConstants {
 		byte[] response = exchangeApdu(BTCHIP_CLA, BTCHIP_INS_GET_TRUSTED_INPUT, (byte)0x80, (byte)0x00, transaction.getLockTime(), OK);		
 		return new BTChipInput(response, true);
 	}
+
+	public BTChipInput createInput(byte[] value, boolean trusted) {
+		return new BTChipInput(value, trusted);
+	}
 	
-	public void startUntrustedTransction(boolean newTransaction, long inputIndex, BTChipInput usedInputList[], byte[] redeemScript) throws BTChipException {
+	public void startUntrustedTransaction(boolean newTransaction, long inputIndex, BTChipInput usedInputList[], byte[] redeemScript) throws BTChipException {
 		// Start building a fake transaction with the passed inputs
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
 		BufferUtils.writeBuffer(data, BitcoinTransaction.DEFAULT_VERSION);
@@ -373,8 +472,56 @@ public class BTChipDongle implements BTChipConstants {
 			currentIndex++;			
 		}				
 	}
+
+	private BTChipOutput convertResponseToOutput(byte[] response) throws BTChipException {
+		BTChipOutput result = null;
+		byte[] value = new byte[(int)(response[0] & 0xff)];
+		System.arraycopy(response, 1, value, 0, value.length);
+		byte userConfirmationValue = response[1 + value.length];
+		if (userConfirmationValue == UserConfirmation.NONE.getValue()) {
+			result = new BTChipOutput(value, UserConfirmation.NONE);
+		}
+		else
+		if (userConfirmationValue == UserConfirmation.KEYBOARD.getValue()) {
+			result = new BTChipOutput(value, UserConfirmation.KEYBOARD);
+		}
+		else
+		if (userConfirmationValue == UserConfirmation.KEYCARD_DEPRECATED.getValue()) {
+			byte[] keycardIndexes = new byte[response.length - 2 - value.length];
+			System.arraycopy(response, 2 + value.length, keycardIndexes, 0, keycardIndexes.length);
+			result = new BTChipOutputKeycard(value, UserConfirmation.KEYCARD_DEPRECATED, keycardIndexes);
+		}
+		else
+		if (userConfirmationValue == UserConfirmation.KEYCARD.getValue()) {
+			byte keycardIndexesLength = response[2 + value.length];
+			byte[] keycardIndexes = new byte[keycardIndexesLength];
+			System.arraycopy(response, 3 + value.length, keycardIndexes, 0, keycardIndexes.length);
+			result = new BTChipOutputKeycard(value, UserConfirmation.KEYCARD, keycardIndexes);
+		}			
+		else
+		if (userConfirmationValue == UserConfirmation.KEYCARD_NFC.getValue()) {
+			byte keycardIndexesLength = response[2 + value.length];
+			byte[] keycardIndexes = new byte[keycardIndexesLength];
+			System.arraycopy(response, 3 + value.length, keycardIndexes, 0, keycardIndexes.length);
+			result = new BTChipOutputKeycard(value, UserConfirmation.KEYCARD_NFC, keycardIndexes);
+		}					
+		else
+		if (userConfirmationValue == UserConfirmation.KEYCARD_SCREEN.getValue()) {
+			byte keycardIndexesLength = response[2 + value.length];
+			byte[] keycardIndexes = new byte[keycardIndexesLength];
+			byte[] screenInfo = new byte[response.length - 3 - value.length - keycardIndexes.length];
+			System.arraycopy(response, 3 + value.length, keycardIndexes, 0, keycardIndexes.length);
+			System.arraycopy(response, 3 + value.length + keycardIndexes.length, screenInfo, 0, screenInfo.length);
+			result = new BTChipOutputKeycardScreen(value, UserConfirmation.KEYCARD_SCREEN, keycardIndexes, screenInfo);
+		}
+		if (result == null) {
+			throw new BTChipException("Unsupported user confirmation method");
+		}
+		return result;		
+	}
 	
 	public BTChipOutput finalizeInput(String outputAddress, String amount, String fees, String changePath) throws BTChipException {
+		BTChipOutput result = null;
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
 		byte path[] = BIP32Utils.splitPath(changePath);
 		data.write(outputAddress.length());
@@ -383,15 +530,27 @@ public class BTChipDongle implements BTChipConstants {
 		BufferUtils.writeUint64BE(data, CoinFormatUtils.toSatoshi(fees));
 		BufferUtils.writeBuffer(data, path);
 		byte[] response = exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_INPUT_FINALIZE, (byte)0x02, (byte)0x00, data.toByteArray(), OK);
-		byte[] value = new byte[(int)(response[0] & 0xff)];
-		System.arraycopy(response, 1, value, 0, value.length);
-		boolean confirmationNeeded = (response[1 + value.length] == (byte)0x01);
-		return new BTChipOutput(value, confirmationNeeded);
+		result = convertResponseToOutput(response);
+		return result;
 	}
 	
-	public boolean finalizeInputFull(byte[] data) throws BTChipException {
+	public BTChipOutput finalizeInputFull(byte[] data, String changePath, boolean skipChangeCheck) throws BTChipException {
+		BTChipOutput result = null;		
 		int offset = 0;
-		byte[] result = null;
+		byte[] response = null;
+		byte[] path = null;
+		boolean oldAPI = false;
+		if (!skipChangeCheck) {
+			if (changePath != null) {
+				path = BIP32Utils.splitPath(changePath);
+				exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_INPUT_FINALIZE_FULL, (byte)0xFF, (byte)0x00, path, null);
+				oldAPI = ((lastSW == SW_INCORRECT_P1_P2) || (lastSW == SW_WRONG_P1_P2));			
+			}
+			else {
+				exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_INPUT_FINALIZE_FULL, (byte)0xFF, (byte)0x00, new byte[1], null);
+				oldAPI = ((lastSW == SW_INCORRECT_P1_P2) || (lastSW == SW_WRONG_P1_P2));			
+			}
+		}
 		while (offset < data.length) {
 			int blockLength = ((data.length - offset) > 255 ? 255 : data.length - offset);
 			byte[] apdu = new byte[blockLength + 5];
@@ -401,18 +560,63 @@ public class BTChipDongle implements BTChipConstants {
 			apdu[3] = (byte)0x00;
 			apdu[4] = (byte)(blockLength);
 			System.arraycopy(data, offset, apdu, 5, blockLength);
-			result = exchangeCheck(apdu, OK);
+			response = exchangeCheck(apdu, OK);
 			offset += blockLength;
 		}
-		return (result[0] == (byte)0x01);
+		if (oldAPI) {
+			byte value = response[0];
+			if (value == UserConfirmation.NONE.getValue()) {
+				result = new BTChipOutput(new byte[0], UserConfirmation.NONE);
+			}
+			else
+			if (value == UserConfirmation.KEYBOARD.getValue()) {
+				result = new BTChipOutput(new byte[0], UserConfirmation.KEYBOARD);
+			}				
+		}
+		else {
+			result = convertResponseToOutput(response);
+		}
+		if (result == null) {
+			throw new BTChipException("Unsupported user confirmation method");
+		}
+		return result;
 	}
+
+	public BTChipOutput finalizeInputFull(byte[] data) throws BTChipException {	
+		return finalizeInputFull(data, null, false);
+	}		
+
+	public BTChipOutput finalizeInputFull(byte[] data, String changePath) throws BTChipException {	
+		return finalizeInputFull(data, changePath, false);
+	}		
+
+	public BTChipOutput finalizeInput(byte[] outputScript, String outputAddress, String amount, String fees, String changePath) throws BTChipException {
+		// Try the new API first
+		boolean oldAPI;
+		byte[] path = null;		
+		if (changePath != null) {
+			path = BIP32Utils.splitPath(changePath);
+			exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_INPUT_FINALIZE_FULL, (byte)0xFF, (byte)0x00, path, null);
+			oldAPI = ((lastSW == SW_INCORRECT_P1_P2) || (lastSW == SW_WRONG_P1_P2));
+		}
+		else {
+			exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_INPUT_FINALIZE_FULL, (byte)0xFF, (byte)0x00, new byte[1], null);
+			oldAPI = ((lastSW == SW_INCORRECT_P1_P2) || (lastSW == SW_WRONG_P1_P2));
+		}
+		if (oldAPI) {
+			return finalizeInput(outputAddress, amount, fees, changePath);
+		}
+		else {
+			return finalizeInputFull(outputScript, null, true);
+		}		
+	}	
 	
-	public byte[] untrustedHashSign(String privateKeyPath, String pin, long lockTime, byte sigHashType) throws BTChipException {
+	public byte[] untrustedHashSign(String privateKeyPath, byte[] pin, long lockTime, byte sigHashType) throws BTChipException {
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
 		byte path[] = BIP32Utils.splitPath(privateKeyPath);
 		BufferUtils.writeBuffer(data, path);
-		data.write(pin.length());
-		BufferUtils.writeBuffer(data, pin.getBytes());
+		data.write(pin.length);
+		BufferUtils.writeBuffer(data, pin);
 		BufferUtils.writeUint32BE(data, lockTime);
 		data.write(sigHashType);
 		byte[] response = exchangeApdu(BTCHIP_CLA, BTCHIP_INS_HASH_SIGN, (byte)0x00, (byte)0x00, data.toByteArray(), OK);
@@ -421,9 +625,13 @@ public class BTChipDongle implements BTChipConstants {
 	}
 	
 	public byte[] untrustedHashSign(String privateKeyPath, String pin) throws BTChipException {
+		return untrustedHashSign(privateKeyPath, pin.getBytes(), 0, (byte)0x01);
+	}
+
+	public byte[] untrustedHashSign(String privateKeyPath, byte[] pin) throws BTChipException {
 		return untrustedHashSign(privateKeyPath, pin, 0, (byte)0x01);
 	}
-	
+
 	public boolean signMessagePrepare(String path, byte[] message) throws BTChipException {
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
 		BufferUtils.writeBuffer(data, BIP32Utils.splitPath(path));
@@ -459,9 +667,8 @@ public class BTChipDongle implements BTChipConstants {
 	
 	public void setKeymapEncoding(byte[] keymapEncoding) throws BTChipException {
 		ByteArrayOutputStream data = new ByteArrayOutputStream();
-		data.write(keymapEncoding.length);
 		BufferUtils.writeBuffer(data, keymapEncoding);
-		exchangeApdu(BTCHIP_CLA, BTCHIP_INS_SET_KEYMAP, (byte)0x00, (byte)0x00, data.toByteArray(), OK);		
+		exchangeApdu(BTCHIP_CLA, BTCHIP_INS_SET_KEYMAP, (byte)0x00, (byte)0x00, data.toByteArray(), OK_OR_NOT_SUPPORTED);		
 	}
 	
 	public boolean setup(OperationMode supportedOperationModes[], Feature features[], int keyVersion, int keyVersionP2SH, byte[] userPin, byte[] wipePin, byte[] keymapEncoding, byte[] seed, byte[] developerKey) throws BTChipException {
@@ -516,5 +723,12 @@ public class BTChipDongle implements BTChipConstants {
 		byte[] response = exchangeApdu(BTCHIP_CLA, BTCHIP_INS_SETUP, (byte)0x00, (byte)0x00, data.toByteArray(), OK);
 		setKeymapEncoding(keymapEncoding);
 		return (response[0] == (byte)0x01);
+	}
+
+	public void setKeycardSeed(byte addressDigits, byte[] key) throws BTChipException {
+		ByteArrayOutputStream data = new ByteArrayOutputStream();
+		data.write((short)(addressDigits & 0xff));
+		BufferUtils.writeBuffer(data, key);
+		exchangeApdu(BTCHIP_ADM_CLA, BTCHIP_INS_ADM_SET_KEYCARD_SEED, (byte)0x00, (byte)0x00, data.toByteArray(), OK);
 	}
 }

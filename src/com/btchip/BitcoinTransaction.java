@@ -194,6 +194,15 @@ public class BitcoinTransaction {
 		}
 		return output.toByteArray();
 	}	
+
+	public byte[] serializeOutputs() throws BTChipException {
+		ByteArrayOutputStream output = new ByteArrayOutputStream();
+		VarintUtils.write(output, outputs.size());
+		for (BitcoinOutput outputItem : outputs) {
+			outputItem.serialize(output);
+		}
+		return output.toByteArray();
+	}
 	
 	public byte[] getVersion() {
 		return version;

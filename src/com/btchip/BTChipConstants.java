@@ -24,6 +24,7 @@ import com.btchip.utils.Dump;
 public interface BTChipConstants {
 	
 	public static final byte BTCHIP_CLA = (byte)0xE0;
+    public static final byte BTCHIP_ADM_CLA = (byte)0xD0;
 	
 	public static final byte BTCHIP_INS_SETUP = (byte)0x20;
 	public static final byte BTCHIP_INS_VERIFY_PIN = (byte)0x22;
@@ -50,9 +51,14 @@ public interface BTChipConstants {
     public static final byte BTCHIP_INS_GET_FIRMWARE_VERSION = (byte)0xc4;
     public static final byte BTCHIP_INS_COMPOSE_MOFN_ADDRESS = (byte)0xc6;
     public static final byte BTCHIP_INS_GET_POS_SEED = (byte)0xca;
+
+    public static final byte BTCHIP_INS_ADM_SET_KEYCARD_SEED = (byte)0x26;
     
     public static final byte[] QWERTY_KEYMAP = Dump.hexToBin("000000000000000000000000760f00d4ffffffc7000000782c1e3420212224342627252e362d3738271e1f202122232425263333362e37381f0405060708090a0b0c0d0e0f101112131415161718191a1b1c1d2f3130232d350405060708090a0b0c0d0e0f101112131415161718191a1b1c1d2f313035");
     public static final byte[] AZERTY_KEYMAP = Dump.hexToBin("08000000010000200100007820c8ffc3feffff07000000002c38202030341e21222d352e102e3637271e1f202122232425263736362e37101f1405060708090a0b0c0d0e0f331112130415161718191d1b1c1a2f64302f2d351405060708090a0b0c0d0e0f331112130415161718191d1b1c1a2f643035");
 	
     public static final int SW_OK = 0x9000;
+    public static final int SW_INS_NOT_SUPPORTED = 0x6D00;
+    public static final int SW_WRONG_P1_P2 = 0x6B00;
+    public static final int SW_INCORRECT_P1_P2 = 0x6A86;
 }
