@@ -324,8 +324,21 @@ public class BTChipDongle implements BTChipConstants {
 		System.arraycopy(data, 0, apdu, 5, data.length);
 		return exchangeCheck(apdu, acceptedSW);
 	}
+
+	private byte[] exchangeApdu(byte cla, byte ins, byte p1, byte p2, int acceptedSW[]) throws BTChipException {
+		byte[] apdu = new byte[4];
+		apdu[0] = cla;
+		apdu[1] = ins;
+		apdu[2] = p1;
+		apdu[3] = p2;
+		return exchangeCheck(apdu, acceptedSW);
+	}
 	
 	private byte[] exchangeApdu(byte cla, byte ins, byte p1, byte p2, int length, int acceptedSW[]) throws BTChipException {
+		if(length == 0) {
+			return exchangeApdu(cla, ins, p1, p2, acceptedSW);
+		}
+
 		byte[] apdu = new byte[5];
 		apdu[0] = cla;
 		apdu[1] = ins;
